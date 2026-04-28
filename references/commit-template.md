@@ -1,6 +1,9 @@
-# 中文提交模板
+# Chinese Commit Message Template
 
-在需要生成 git commit message 时，优先参考以下格式。
+Use this reference when a commit is expected. Write the final git commit message
+in Chinese unless the user explicitly requests another language.
+
+## Format
 
 ```text
 type(scope): 中文简要主题
@@ -25,14 +28,16 @@ type(scope): 中文简要主题
 - 后续建议
 ```
 
-## 使用原则
+## Rules
 
-- `scope` 可选，没有合适范围时可以省略。
-- 正文要覆盖动机、核心修改、验证结果，不要只写一句“已完成”。
-- 如果提交是为了先保存用户已有改动，再继续新开发，要在 `背景` 或 `说明` 中明确写出这一点。
-- 如果有验证未执行，要在 `验证` 或 `说明` 中明说原因。
+- Keep the subject concise; include `scope` only when it adds useful context.
+- Cover motivation, implementation details, validation, and residual risk.
+- Mention every validation command that was run and its result.
+- If validation was skipped or only partially run, explain why.
+- If the commit preserves pre-existing user changes before new development, say that explicitly in `背景` or `说明`.
+- Do not use empty messages such as `update`, `fix`, `done`, or `changes`.
 
-## 推荐 type
+## Recommended Types
 
 - `feat`: 新功能
 - `fix`: 缺陷修复
