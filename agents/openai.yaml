@@ -1,0 +1,6 @@
+interface:
+  display_name: "Git Commit Guard"
+  short_description: "Guard dirty worktrees, validation flow, and Chinese git commits"
+  default_prompt: "Use $git-commit-guard to inspect dirty worktrees, validate the repo, and create detailed Chinese git commits before and after coding work."
+policy:
+  allow_implicit_invocation: true
