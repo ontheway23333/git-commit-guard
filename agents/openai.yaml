@@ -1,6 +1,6 @@
 interface:
   display_name: "Git Commit Guard"
-  short_description: "Protect worktrees and write validated commits"
-  default_prompt: "Use $git-commit-guard before editing this repository: inspect git status, protect existing work, validate changes, and create detailed Chinese commits when expected."
+  short_description: "Guard Git milestones and documentation lifecycle"
+  default_prompt: "Use $git-commit-guard to protect the worktree, govern managed documentation transitions, validate each milestone, and create detailed Chinese commits."
 policy:
   allow_implicit_invocation: true
