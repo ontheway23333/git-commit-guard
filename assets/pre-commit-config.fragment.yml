@@ -1,0 +1,12 @@
+# Merge this local hook into the target repository's .pre-commit-config.yaml
+# after vendoring scripts/docs_guard.py as tools/docs_guard.py.
+repos:
+  - repo: local
+    hooks:
+      - id: documentation-lifecycle
+        name: Validate documentation lifecycle
+        entry: python tools/docs_guard.py check . --base-ref HEAD
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true

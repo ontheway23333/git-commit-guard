@@ -1,0 +1,45 @@
+# Copy to .github/workflows/docs-guard.yml after vendoring this skill's
+# scripts/docs_guard.py as tools/docs_guard.py in the target repository.
+name: Documentation Guard
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  documentation-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve comparison base
+        id: base
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$BEFORE" && "$BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+            echo "ref=$BEFORE" >> "$GITHUB_OUTPUT"
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            echo "ref=HEAD^" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate documentation lifecycle
+        run: python tools/docs_guard.py check . --base-ref "${{ steps.base.outputs.ref }}"
+
+      - name: Verify generated index and registry
+        run: python tools/docs_guard.py index . --check

@@ -1,0 +1,32 @@
+# Copy to <repository>/.git-commit-guard.yml and adapt only when the defaults
+# do not match the repository's established documentation layout.
+version: 1
+
+documentation:
+  enabled: true
+  root: docs
+
+  directories:
+    plan: plan
+    migration: migrations
+    generated: generated
+    archive: archive
+
+  archive:
+    preserve_type: true
+    partition_by_year: true
+
+  filename:
+    pattern: "{created_date}-{status}-{slug}.md"
+    date_format: "%Y-%m-%d"
+
+  index:
+    enabled: true
+    path: INDEX.md
+    registry: .registry.json
+
+  validation:
+    unique_id: true
+    validate_links: true
+    enforce_frontmatter: true
+    fail_on_invalid_transition: true
