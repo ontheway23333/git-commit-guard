@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import py_compile
 import re
 import sys
 from pathlib import Path
@@ -12,16 +14,27 @@ from pathlib import Path
 REQUIRED_FILES = [
     ".editorconfig",
     ".gitattributes",
+    ".gitignore",
     "SKILL.md",
     "agents/openai.yaml",
+    "assets/git-commit-guard.yml",
+    "assets/github-actions-docs-guard.yml",
+    "assets/pre-commit-config.fragment.yml",
     "references/commit-template.md",
+    "references/document-lifecycle.md",
+    "scripts/docs_guard.py",
+    "scripts/validate_skill.py",
+    "tests/test_docs_guard.py",
     "README.md",
     "LICENSE",
 ]
 
 SKILL_NAME_RE = re.compile(r"^[a-z0-9-]{1,63}$")
 TEXT_EXTENSIONS = {".md", ".py", ".yaml", ".yml"}
-TEXT_FILENAMES = {".editorconfig", ".gitattributes", "LICENSE"}
+TEXT_FILENAMES = {".editorconfig", ".gitattributes", ".gitignore", "LICENSE"}
+MAX_DESCRIPTION_CHARS = 1024
+MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+SKILL_SCRIPT_RE = re.compile(r"(?:^|[\s`\"'(]|<skill-dir>/)scripts/([A-Za-z0-9_.-]+\.py)", re.MULTILINE)
 
 
 def fail(errors: list[str], message: str) -> None:
@@ -90,6 +103,8 @@ def validate_skill_md(root: Path, errors: list[str]) -> None:
     description = metadata.get("description", "")
     if len(description.split()) < 15:
         fail(errors, "SKILL.md description is too short to trigger reliably")
+    if len(description) > MAX_DESCRIPTION_CHARS:
+        fail(errors, f"SKILL.md description must stay within {MAX_DESCRIPTION_CHARS} characters, got {len(description)}")
     if "git" not in description.lower() or "commit" not in description.lower():
         fail(errors, "SKILL.md description should mention git and commit behavior")
 
@@ -152,6 +167,75 @@ def validate_text_files(root: Path, errors: list[str]) -> None:
                 fail(errors, f"{path.relative_to(root)}:{index} has trailing whitespace")
 
 
+def validate_internal_links(root: Path, errors: list[str]) -> None:
+    """A broken reference silently removes guidance the agent is told to read."""
+
+    for path in sorted(root.rglob("*.md")):
+        if ".git" in path.parts:
+            continue
+        text = read_text(path, errors)
+        for destination in MARKDOWN_LINK_RE.findall(text):
+            if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", destination) or destination.startswith(("#", "//")):
+                continue
+            target = destination.split("#", 1)[0].split("?", 1)[0]
+            if not target:
+                continue
+            resolved = (root / target.lstrip("/")) if target.startswith("/") else (path.parent / target)
+            if not resolved.exists():
+                fail(errors, f"{path.relative_to(root)} links to missing path: {destination}")
+
+
+def validate_referenced_scripts(root: Path, errors: list[str]) -> None:
+    for relative in ("SKILL.md", "README.md", "references/document-lifecycle.md"):
+        path = root / relative
+        if not path.is_file():
+            continue
+        for name in sorted(set(SKILL_SCRIPT_RE.findall(read_text(path, errors)))):
+            if not (root / "scripts" / name).is_file():
+                fail(errors, f"{relative} references missing scripts/{name}")
+
+
+def validate_python_sources(root: Path, errors: list[str]) -> None:
+    for path in sorted(root.rglob("*.py")):
+        if ".git" in path.parts or "__pycache__" in path.parts:
+            continue
+        try:
+            py_compile.compile(str(path), doraise=True, cfile=str(path.with_suffix(".pyc.check")))
+        except py_compile.PyCompileError as exc:
+            fail(errors, f"{path.relative_to(root)} does not compile: {exc.msg.strip()}")
+        finally:
+            path.with_suffix(".pyc.check").unlink(missing_ok=True)
+
+
+def validate_default_config_asset(root: Path, errors: list[str]) -> None:
+    """Prove the shipped default config is accepted by the shipped guard tool."""
+
+    script = root / "scripts" / "docs_guard.py"
+    asset = root / "assets" / "git-commit-guard.yml"
+    if not script.is_file() or not asset.is_file():
+        return
+    spec = importlib.util.spec_from_file_location("_docs_guard_validation", script)
+    if spec is None or spec.loader is None:
+        fail(errors, "cannot import scripts/docs_guard.py")
+        return
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses resolve their defining module through sys.modules during exec_module.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        config = module.load_config(root, asset)
+    except Exception as exc:
+        fail(errors, f"assets/git-commit-guard.yml is not accepted by docs_guard.load_config: {exc}")
+        return
+    finally:
+        sys.modules.pop(spec.name, None)
+    defaults = module.DEFAULT_CONFIG["documentation"]
+    documentation = config["documentation"]
+    for key in ("root", "directories", "filename", "index"):
+        if documentation.get(key) != defaults.get(key):
+            fail(errors, f"assets/git-commit-guard.yml documentation.{key} drifted from DEFAULT_CONFIG")
+
+
 def validate_commit_template(root: Path, errors: list[str]) -> None:
     text = read_text(root / "references" / "commit-template.md", errors)
     if not text:
@@ -181,6 +265,10 @@ def main() -> int:
     validate_markdown(root, errors)
     validate_text_files(root, errors)
     validate_commit_template(root, errors)
+    validate_internal_links(root, errors)
+    validate_referenced_scripts(root, errors)
+    validate_python_sources(root, errors)
+    validate_default_config_asset(root, errors)
 
     if errors:
         for error in errors:

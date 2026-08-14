@@ -25,3 +25,42 @@ jobs:
 
       - name: Validate skill package
         run: python scripts/validate_skill.py .
+
+  tests:
+    name: Tests (${{ matrix.os }}, py${{ matrix.python-version }}, ${{ matrix.yaml-backend }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported interpreter, using the bundled stdlib YAML subset parser.
+          - os: ubuntu-latest
+            python-version: "3.9"
+            yaml-backend: stdlib
+          # PyYAML is optional, so the alternate parser path needs its own run.
+          - os: ubuntu-latest
+            python-version: "3.13"
+            yaml-backend: pyyaml
+          # The guard does path projection and link rewriting; Windows separators matter.
+          - os: windows-latest
+            python-version: "3.13"
+            yaml-backend: stdlib
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install PyYAML
+        if: matrix.yaml-backend == 'pyyaml'
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: Run documentation guard tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Self-check the guard against this repository
+        run: python scripts/docs_guard.py check . --base-ref HEAD
