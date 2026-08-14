@@ -34,6 +34,7 @@ TEXT_EXTENSIONS = {".md", ".py", ".yaml", ".yml"}
 TEXT_FILENAMES = {".editorconfig", ".gitattributes", ".gitignore", "LICENSE"}
 MAX_DESCRIPTION_CHARS = 1024
 MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 SKILL_SCRIPT_RE = re.compile(r"(?:^|[\s`\"'(]|<skill-dir>/)scripts/([A-Za-z0-9_.-]+\.py)", re.MULTILINE)
 
 
@@ -167,13 +168,26 @@ def validate_text_files(root: Path, errors: list[str]) -> None:
                 fail(errors, f"{path.relative_to(root)}:{index} has trailing whitespace")
 
 
+def strip_code(text: str) -> str:
+    """Drop fenced blocks and inline spans so example Markdown is not read as live links."""
+
+    lines = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        lines.append("" if fenced else line)
+    return INLINE_CODE_RE.sub("", "\n".join(lines))
+
+
 def validate_internal_links(root: Path, errors: list[str]) -> None:
     """A broken reference silently removes guidance the agent is told to read."""
 
     for path in sorted(root.rglob("*.md")):
         if ".git" in path.parts:
             continue
-        text = read_text(path, errors)
+        text = strip_code(read_text(path, errors))
         for destination in MARKDOWN_LINK_RE.findall(text):
             if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", destination) or destination.startswith(("#", "//")):
                 continue

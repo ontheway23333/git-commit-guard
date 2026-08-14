@@ -15,6 +15,23 @@ canonical path instead of drifting into `plan-final-v2-NEW.md`.
 Use it when an agent is allowed to work inside a git repository and you want a
 clear audit trail instead of vague commits like `update code`.
 
+## Contents
+
+- [What It Enforces](#what-it-enforces)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Expected Agent Behavior](#expected-agent-behavior)
+- [Commit Message Format](#commit-message-format)
+- [Documentation Lifecycle](#documentation-lifecycle)
+- [Repository Layout](#repository-layout)
+- [Troubleshooting](#troubleshooting)
+- [Validation](#validation)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
 ## What It Enforces
 
 - **Status first**: run `git status --short --branch` before starting new code work.
@@ -28,11 +45,21 @@ clear audit trail instead of vague commits like `update code`.
   changes, verification, and known limitations.
 - **No destructive shortcuts**: never run `git reset --hard`, `git clean -fd`,
   `git checkout -- <path>`, history rewrites, or `--no-verify` unless the user
-  explicitly asks for that command.
+  explicitly asks for that command. Uncommitted work has no reflog.
 - **Secrets and artifact guard**: read the cached diff for credentials, `.env`
   files, machine-local paths, and build output before staging.
 - **Documentation lifecycle**: immutable IDs, finite-state transitions, archival,
   repaired links, and generated indexes — enforced by a bundled validator.
+
+## Requirements
+
+| Requirement | Notes |
+|---|---|
+| Python 3.9+ | `scripts/docs_guard.py` uses only the standard library |
+| Git on `PATH` | used for `ls-files`, `ls-tree`, `mv`, and base-ref comparison |
+| PyYAML | **optional**; a conservative YAML subset parser is used when absent |
+
+The skill runs no service, opens no network connection, and collects no data.
 
 ## Installation
 
@@ -55,6 +82,68 @@ git clone https://github.com/ontheway23333/git-commit-guard.git `
 ```
 
 Restart Codex after installation if your client does not auto-refresh skills.
+
+## Quick Start
+
+Create a managed plan in any git repository:
+
+```bash
+python scripts/docs_guard.py new plan payment-refactor --repo . --title "Payment Refactor"
+```
+
+```text
+Create: PLAN-20260815-001 (plan/draft)
+Path: docs/plan/2026-08-15-draft-payment-refactor.md
+Created: docs/plan/2026-08-15-draft-payment-refactor.md
+```
+
+The tool allocates the ID, projects the path, and writes canonical frontmatter
+plus the required sections:
+
+```yaml
+---
+schema_version: 1
+id: PLAN-20260815-001
+slug: payment-refactor
+title: Payment Refactor
+type: plan
+status: draft
+created_at: 2026-08-15T02:40:33+08:00
+updated_at: 2026-08-15T02:40:33+08:00
+status_changed_at: 2026-08-15T02:40:33+08:00
+owner: null
+supersedes: []
+superseded_by: []
+related: []
+depends_on: []
+---
+```
+
+It also regenerates `docs/INDEX.md`:
+
+```markdown
+## Active Plans
+
+| ID | Status | Title | Updated |
+|---|---|---|---|
+| PLAN-20260815-001 | draft | [Payment Refactor](plan/2026-08-15-draft-payment-refactor.md) | 2026-08-15 |
+```
+
+Move the plan through its lifecycle as the work progresses:
+
+```bash
+python scripts/docs_guard.py transition docs/plan/2026-08-15-draft-payment-refactor.md active
+```
+
+Verify the repository at any point:
+
+```bash
+python scripts/docs_guard.py check . --base-ref HEAD
+```
+
+```text
+Summary: 1 managed, 1 legacy/exempt, 0 errors, 0 warnings
+```
 
 ## Usage
 
@@ -110,34 +199,114 @@ type(scope): 中文简要主题
 - 风险、未覆盖部分或后续建议
 ```
 
+A filled-in example:
+
+```text
+fix(payment): 修复退款金额四舍五入偏差
+
+背景：
+- 退款单在分币位出现 1 分误差，财务对账每日需人工修正。
+- 根因是浮点累加后再取整，而非按最小货币单位计算。
+
+变更：
+- RefundCalculator 改为整数分计算，移除中间浮点累加。
+- 补充边界用例：0 元退款、超额退款、多笔部分退款合并。
+
+验证：
+- pytest tests/payment/ -q  -> 42 passed
+- ruff check app/payment    -> 通过
+
+说明：
+- 历史错误数据需另行脚本修正，本次不含数据迁移。
+```
+
+Recommended types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
+
 ## Documentation Lifecycle
 
 Managed documents are Markdown files under `docs/` whose frontmatter carries an
 immutable `id`. Markdown without one stays legacy/exempt, so the skill never
 turns an existing repository into a surprise migration project.
 
-`scripts/docs_guard.py` is a dependency-light CLI (PyYAML optional) that owns the
-error-prone parts of that lifecycle:
+### States
 
-```bash
-python scripts/docs_guard.py new plan payment-refactor --repo . --title "Payment Refactor"
-python scripts/docs_guard.py check . --base-ref HEAD
-python scripts/docs_guard.py index . --check
-python scripts/docs_guard.py transition <document> review
-python scripts/docs_guard.py link-successor <completed-document> <successor-document>
+Plans and migrations:
+
+| From | Allowed next states |
+|---|---|
+| `draft` | `active`, `cancelled`, `superseded` |
+| `active` | `blocked`, `review`, `completed`, `cancelled`, `superseded` |
+| `blocked` | `active`, `cancelled`, `superseded` |
+| `review` | `active`, `completed`, `superseded` |
+| `completed`, `cancelled`, `superseded` | terminal — no way back |
+
+Generated documents use `current` and `stale`, with `superseded` terminal.
+
+Terminal documents are archived, never reopened. When completed work later needs
+a new design, `link-successor` attaches a successor while preserving the
+predecessor's `completed` status as historical fact.
+
+### Path projection
+
+Frontmatter is the source of truth; the path is a projection of it. Completing a
+plan moves the file and repairs every inbound link in one operation:
+
+```text
+before                                          after
+docs/                                           docs/
+|-- plan/                                       |-- archive/
+|   `-- 2026-08-15-review-payment-refactor.md   |   `-- plan/
+|-- INDEX.md                                    |       `-- 2026/
+`-- .registry.json                              |           `-- 2026-08-15-completed-payment-refactor.md
+                                                |-- INDEX.md
+                                                `-- .registry.json
 ```
 
-`new` allocates a collision-free ID, projects the canonical path, and writes the
-required sections. `transition` performs the status change, `git mv`, link
-repair, and index refresh as one rollback-protected operation. Full rules live in
+The creation date in the filename never changes — it is document identity, not
+last-modified. A plan created on 2026-08-15 and completed on 2026-08-30 keeps
+`2026-08-15` in its name.
+
+### CLI
+
+`scripts/docs_guard.py` is a dependency-light CLI that owns the error-prone parts
+of the lifecycle:
+
+| Command | Purpose |
+|---|---|
+| `new <type> <slug>` | create a document with a collision-free ID and canonical path |
+| `check <repo> [--base-ref REF]` | validate structure, links, relationships, and history |
+| `index <repo> [--check]` | regenerate or verify `INDEX.md` and `.registry.json` |
+| `transition <doc> <status>` | status change, `git mv`, link repair, and index refresh as one operation |
+| `link-successor <old> <new>` | attach a successor without rewriting terminal history |
+
+`new` and `transition` accept `--dry-run` to preview without writing.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | no errors |
+| `1` | validation errors found |
+| `2` | guard failure or invalid usage |
+
+Full rules live in
 [`references/document-lifecycle.md`](references/document-lifecycle.md).
 
-To enforce this in your own repository, vendor `scripts/docs_guard.py` to a
-committed path such as `tools/docs_guard.py`, then adapt
+### Enforcing it in your own repository
+
+Vendor `scripts/docs_guard.py` to a committed path such as `tools/docs_guard.py`
+— CI cannot rely on a developer's personal skill installation — then adapt
 [`assets/pre-commit-config.fragment.yml`](assets/pre-commit-config.fragment.yml)
 and [`assets/github-actions-docs-guard.yml`](assets/github-actions-docs-guard.yml).
 Copy [`assets/git-commit-guard.yml`](assets/git-commit-guard.yml) to
 `.git-commit-guard.yml` only when the defaults do not fit.
+
+In CI, compare against the real integration base rather than `HEAD`:
+
+```bash
+python tools/docs_guard.py check . --base-ref origin/main
+python tools/docs_guard.py index . --check
+```
 
 ## Repository Layout
 
@@ -168,6 +337,18 @@ git-commit-guard/
 `-- README.md
 ```
 
+## Troubleshooting
+
+| Message | Cause and fix |
+|---|---|
+| `source has staged changes; commit or unstage them before transition` | `git mv` stages the previous rename. Commit that milestone before the next transition. |
+| `transition requires a valid baseline` | The repository already has documentation errors. Run `check` first and resolve them. |
+| `illegal transition completed -> active` | Terminal status is permanent. Create a successor and use `link-successor`. |
+| `slug '<slug>' is already used by a managed document` | Slugs are unique and immutable. Choose a different one; do not rename an existing document. |
+| `stale; run docs_guard.py index` | `INDEX.md` or `.registry.json` is out of date. Run `index` and commit it with the change that made it stale. |
+| `cannot read git reference '<ref>'` | The base ref does not exist locally. Fetch it first; in CI use `fetch-depth: 0`. |
+| `check` reports `0 managed` in a repository full of docs | Expected. Documents become managed only once their frontmatter has an `id`; unmarked Markdown stays exempt by design. |
+
 ## Validation
 
 Run the package validator and the guard tests before publishing changes:
@@ -180,8 +361,8 @@ python scripts/validate_skill.py .
 python -m unittest discover -s tests -v
 ```
 
-The validator checks required files, frontmatter, internal Markdown links,
-Python syntax, and that the shipped default config is still accepted by
+The validator checks required files, `SKILL.md` frontmatter, internal Markdown
+links, Python syntax, and that the shipped default config is still accepted by
 `docs_guard.py`. CI runs the tests on Linux and Windows, with and without
 PyYAML, so both YAML parsing paths stay exercised.
 
@@ -190,12 +371,6 @@ available, you can run that too:
 
 ```bash
 python path/to/skill-creator/scripts/quick_validate.py /path/to/git-commit-guard
-```
-
-Also run basic repository checks before publishing changes:
-
-```bash
-git status --short --branch
 ```
 
 ## Contributing
@@ -207,7 +382,7 @@ Pull requests are welcome. Keep changes small and auditable:
 - Keep repository automation dependency-light and documented in `README.md`.
 - Preserve the Chinese commit policy unless the change intentionally adds a
   configurable alternative.
-- Validate the skill folder before opening a pull request.
+- Validate the skill folder and run the tests before opening a pull request.
 - Do not add secrets, local machine paths, generated build output, or large
   binary artifacts.
 
